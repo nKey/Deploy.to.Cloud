@@ -22,7 +22,7 @@ Vagrant.configure(2) do |config|
   # Create a forwarded port mapping which allows access to a specific port
   # within the machine from a port on the host machine. In the example below,
   # accessing "localhost:8080" will access port 80 on the guest machine.
-  # config.vm.network "forwarded_port", guest: 80, host: 8080
+  config.vm.network "forwarded_port", guest: 8030, host: 8030
 
   # Create a private network, which allows host-only access to the machine
   # using a specific IP.
@@ -65,38 +65,57 @@ Vagrant.configure(2) do |config|
   # Puppet, Chef, Ansible, Salt, and Docker are also available. Please see the
   # documentation for more information about their specific syntax and use.
   config.vm.provision "shell", inline: <<-SHELL
+    # OPTIONS
+    BUILD_SOURCE=
+    HOST="https://chat.example.com"
+    MONGO_URL="mongodb://localhost:27017/rocketchat"
+    #MONGO_OPLOG_URL="mongodb://localhost:27017/local"
+    ROOT_URL="${HOST}"
+    PORT="8030"
+    
     # SYSTEM CONFIGURATION
+    curl -#L https://deb.nodesource.com/setup_0.10 -o setup_node.sh
+    bash setup_node.sh
+
+    apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv 7F0CEB10
+    echo "deb http://repo.mongodb.org/apt/ubuntu trusty/mongodb-org/3.0 multiverse" > /etc/apt/sources.list.d/mongodb-org-3.0.list
+
     apt-get update
-    apt-get install -y nodejs npm mongodb unzip
+    apt-get install -y nodejs mongodb-org graphicsmagick build-essential libssl-dev unzip
 
-    ln -s /usr/bin/nodejs /usr/bin/node
-    ln -s /usr/bin/nodejs /usr/sbin/node
-
-    npm install nave -g
+    npm install n -g
     npm install pm2 -g
-    nave usemain 0.10.40
+ 
+    NODEJS_VERSION=$(dpkg-query --showformat='${Version}' --show nodejs | cut -d- -f1)
+    n "${NODEJS_VERSION}"
 
-    curl https://install.meteor.com/ | sh
+    if [ -n "${BUILD_SOURCE}" ]; then
+        curl https://install.meteor.com/ | sh
+    fi
 
     pm2 startup
 
-    mkdir -p /var/www/
+    mkdir -p /var/www/rocket.chat
     mkdir -p /var/log/rocket.chat
 
     # DEPLOY
-    HOST=http://your_hostname.com
-    MONGO_URL=mongodb://localhost:27017/rocketchat
-    MONGO_OPLOG_URL=mongodb://localhost:27017/local
-    ROOT_URL=http://localhost:3000
-    PORT=3000
-
     cd /var/www/
-    wget https://github.com/RocketChat/Rocket.Chat/archive/master.zip
-    unzip master.zip
-    mv Rocket.Chat-master rocket.chat
+    if [ -n "${BUILD_SOURCE}" ]; then
+        # Install from source
+        curl -#L -O https://github.com/RocketChat/Rocket.Chat/archive/master.zip
+        unzip master.zip
+        mv Rocket.Chat-master/* rocket.chat
+    else
+        # Install from release
+        curl -#L https://rocket.chat/releases/latest/download -o rocket.chat.tgz
+        tar zxf rocket.chat.tgz -C rocket.chat
+    fi
 
     cd ./rocket.chat
-    meteor build --server "$HOST" --directory .
+    if [ -n "${BUILD_SOURCE}" ]; then
+        # Install from source
+        meteor build --server "$HOST" --directory .
+    fi
 
     cd ./bundle/programs/server
     npm install
@@ -113,7 +132,10 @@ Vagrant.configure(2) do |config|
     echo "    \\"port\\": \\"$PORT\\","                         >> pm2-rocket-chat.json
     echo '    "env": {'                                         >> pm2-rocket-chat.json
     echo "      \\"MONGO_URL\\": \\"$MONGO_URL\\","             >> pm2-rocket-chat.json
+    if [ -n "${MONGO_OPLOG_URL}" ]; then
+    # Use Mongo ReplicaSet
     echo "      \\"MONGO_OPLOG_URL\\": \\"$MONGO_OPLOG_URL\\"," >> pm2-rocket-chat.json
+    fi
     echo "      \\"ROOT_URL\\": \\"$ROOT_URL\\","               >> pm2-rocket-chat.json
     echo "      \\"PORT\\": \\"$PORT\\""                        >> pm2-rocket-chat.json
     echo '    }'                                                >> pm2-rocket-chat.json
